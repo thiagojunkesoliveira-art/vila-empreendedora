@@ -18,7 +18,7 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Ler a versão do package.json
         id: version
@@ -38,7 +38,7 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: steps.check.outputs.exists == 'false'
         with:
           node-version: 22
@@ -48,8 +48,24 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: npm ci
 
-      - name: Montar o instalador e publicar a release
+      - name: Montar o instalador
         if: steps.check.outputs.exists == 'false'
+        run: npx electron-builder --win --publish never
+
+      # One release, created in a single step, with the tag on this commit.
+      - name: Publicar a release
+        if: steps.check.outputs.exists == 'false'
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --publish always
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.version.outputs.value }}"
+          gh release create "v$v" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Vila Empreendedora $v" \
+            --notes "Baixe o arquivo Vila-Empreendedora-Setup-$v.exe abaixo e abra para instalar." \
+            --latest \
+            "dist/Vila-Empreendedora-Setup-$v.exe" \
+            "dist/Vila-Empreendedora-Setup-$v.exe.blockmap" \
+            "dist/latest.yml"
