@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vila Empreendedora</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- GAME:BODY:START -->
+<div id="game">
+  <canvas id="cv" width="240" height="168"></canvas>
+  <div id="title" class="hidden"><h1>Vila<br>Empreendedora</h1><p>Da garagem à torre</p></div>
+  <div id="goal" class="box hidden"><span class="tag">Objetivo</span><span id="goalText"></span></div>
+  <div id="loc" class="box off"></div>
+  <div id="hud" class="box hidden">
+    <div class="hrow"><span id="hIcon" class="sky">☀</span><span id="hTime"></span></div>
+    <div class="hrow"><i class="coin"></i><span id="hMoney"></span></div>
+    <div class="eb"><span class="bolt">⚡</span><div class="bar"><i id="hEn"></i></div></div>
+    <div id="hEvent" class="hidden"></div>
+  </div>
+  <div id="toast" class="box hidden"></div>
+  <div id="dlg" class="box hidden"><div id="dlgName" class="hidden"></div><canvas id="dlgPortrait" class="hidden" width="32" height="32"></canvas>
+    <div id="dlgBody"><div id="dlgText"></div><div id="inRow" class="hidden"><input id="dlgInput" type="text" autocomplete="off" spellcheck="false"><button id="inOk" type="button">OK</button></div></div><div id="dlgArrow" class="hidden">▼</div></div>
+  <div id="menu" class="box hidden"></div>
+  <div id="panel" class="box hidden"></div>
+  <div id="fade"></div>
+</div>
+<div id="help"><b>Setas/WASD</b> andar · <b>Shift</b> correr · <b>Z/Espaço/Enter</b> interagir · <b>X/Esc</b> menu e voltar · <b>M</b> som</div>
+<button id="sndBtn" type="button" aria-pressed="true">🔊 Som ligado</button>
+<div id="ver" class="hidden"></div>
+<div id="pad">
+  <div class="dpad"><button class="u" data-k="up">▲</button><button class="l" data-k="left">◀</button><button class="r" data-k="right">▶</button><button class="d" data-k="down">▼</button></div>
+  <div class="ab"><button class="bb" data-k="b">B</button><button class="aa" data-k="a">A</button></div>
+</div>
+<!-- GAME:BODY:END -->
+<script src="game.js"></script>
+</body>
+</html>

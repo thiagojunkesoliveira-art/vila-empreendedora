@@ -1,0 +1,9 @@
+node_modules/
+dist/
+web/
+*.log
+.claude/
+.DS_Store
+Thumbs.db
+# backups contain your save data: never commit them
+*backup*.json
