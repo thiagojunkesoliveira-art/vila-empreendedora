@@ -16,15 +16,16 @@ function newGame() {
   const seed = (Math.random() * 2 ** 31) | 0;
   generateWorld(seed);
   S = {
-    v: 3, seed, created: Date.now(), last: Date.now(), day: 1, time: DAY_LEN * 0.05, played: 0,
-    res: { madeira: 0, pedra: 0, sucata: 0, comida: 6, tecido: 0, pecas: 0, municao: 0, curativo: 1 },
+    v: 3, v31: true, seed, created: Date.now(), last: Date.now(), day: 1, time: DAY_LEN * 0.05, played: 0,
+    res: { madeira: 0, pedra: 0, sucata: 0, comida: 6, tecido: 0, pecas: 0, municao: 0, curativo: 1, sementes: 2, mudas: 0 },
     items: [], hotbar: [null, null, null, null, null, null], sel: 0, head: null, body: null,
-    player: { x: W.spawn.x * TS + 8, y: W.spawn.y * TS + 8, hp: 100, hunger: 100, dir: 0 },
-    bench: 1, tut: 0, sound: true,
-    stats: { walked: 0, kills: 0, crates: 0, built: 0, deaths: 0, crafted: 0, nights: 0 },
-    surv: [], npcs: [], regrow: [], farms: {}, nextId: 1,
+    player: { x: W.spawn.x * TS + 8, y: W.spawn.y * TS + 8, hp: 100, hunger: 100, stam: 100, dir: 0 },
+    tut: 0, sound: true,
+    stats: { walked: 0, kills: 0, crates: 0, built: 0, deaths: 0, crafted: 0, nights: 0, planted: 0, tamed: 0, repaired: 0 },
+    surv: [], npcs: [], animals: [], regrow: [], farms: {}, grow: {}, nextId: 1,
   };
   placeStrandedSurvivors();
+  spawnAnimals(16, true);
   return S;
 }
 function placeStrandedSurvivors() {
@@ -89,29 +90,23 @@ function armorValue() {
   for (const id of [S.head, S.body]) { const it = id && itemById(id); if (it) a += istat(it, 'armor'); }
   return a;
 }
-function craftItem(base) {
+// Best bench built anywhere: unlocks structures. Crafting uses the bench you are standing at.
+function benchLevel() { return countObj(O.BENCH3) ? 3 : countObj(O.BENCH2) ? 2 : countObj(O.BENCH) ? 1 : 0; }
+function craftItem(base, tier) {
   const d = ITEMS[base];
-  if (d.tier > S.bench) return say(`Precisa da bancada nível ${d.tier}.`, 'bad');
+  if (d.tier > tier) return say(`Precisa da ${BENCH_NAMES[d.tier]}.`, 'bad');
   if (!pay(d.cost)) return say('Faltam recursos.', 'bad');
-  const it = addItem(base, rollRarity(S.bench - 1));
+  const it = addItem(base, rollRarity(tier - 1));
   S.stats.crafted++;
   say(`Fabricado: ${d.n} (${RAR[it.r].n}).`, it.r >= 2 ? 'rare' : 'good');
   sfx('craft');
   return it;
 }
-function craftMake(m) {
-  if (m.tier > S.bench) return say(`Precisa da bancada nível ${m.tier}.`, 'bad');
+function craftMake(m, tier) {
+  if (m.tier > tier) return say(`Precisa da ${BENCH_NAMES[m.tier]}.`, 'bad');
   if (!pay(m.cost)) return say('Faltam recursos.', 'bad');
   for (const k in m.give) gain(k, m.give[k]);
   sfx('craft');
-}
-function upgradeBench() {
-  const c = BENCH_UP[S.bench + 1];
-  if (!c) return;
-  if (!pay(c)) return say('Faltam recursos.', 'bad');
-  S.bench++;
-  say(`Bancada nível ${S.bench}! Novas receitas liberadas.`, 'good');
-  sfx('build');
 }
 function scrapItem(id) {
   const it = itemById(id);
@@ -190,22 +185,35 @@ function useHeld(dt) {
     return;
   }
   const spd = d ? d.spd : 2.2, range = d ? d.range : 18;
+  const tx = tileOf(mouseW.x), ty = tileOf(mouseW.y);
+  // hammer on a damaged structure: repair it
+  if (d && d.kind === 'hammer') {
+    const o = objAt(tx, ty), od = OBJ[o];
+    if (od && od.build && W.hp[idx(tx, ty)] < od.hp && dist(p.x, p.y - 4, tx * TS + 8, ty * TS + 8) <= REACH + 8) { actCd = 1 / spd; repair(tx, ty, it); return; }
+  }
   actCd = 1 / spd;
-  // zombies in the swing arc come first
-  let hitZ = false;
-  for (const z of Z) {
-    const dd = dist(p.x, p.y - 4, z.x, z.y - 4);
-    if (dd > range + z.r) continue;
-    let da = Math.atan2(z.y - p.y, z.x - p.x) - ang;
+  // zombies and wild animals in the swing arc come first
+  const inArc = (e, r) => {
+    if (dist(p.x, p.y - 4, e.x, e.y - 4) > range + r) return false;
+    let da = Math.atan2(e.y - p.y, e.x - p.x) - ang;
     da = Math.atan2(Math.sin(da), Math.cos(da));
-    if (Math.abs(da) > 1.1) continue;
-    hurtZombie(z, d ? istat(it, 'dmg') : 5, Math.cos(ang) * 60, Math.sin(ang) * 60);
+    return Math.abs(da) <= 1.1;
+  };
+  let hitZ = false;
+  const kb = 60 * (d && d.knock ? d.knock : 1);
+  for (const z of [...Z]) {
+    if (!inArc(z, z.r)) continue;
+    hurtZombie(z, d ? istat(it, 'dmg') : 5, Math.cos(ang) * kb, Math.sin(ang) * kb);
+    hitZ = true;
+  }
+  for (const a of [...S.animals]) {
+    if (a.tame || !inArc(a, ANIMALS[a.t].r)) continue;
+    hurtAnimal(a, d ? istat(it, 'dmg') : 4);
     hitZ = true;
   }
   FX.push({ swing: true, x: p.x, y: p.y - 6, a: ang, life: 0.15, r: range });
   if (hitZ) { if (it) wearItem(it); sfx('hit'); return; }
   // otherwise gather the tile under the mouse
-  const tx = tileOf(mouseW.x), ty = tileOf(mouseW.y);
   if (dist(p.x, p.y - 4, tx * TS + 8, ty * TS + 8) > REACH) return;
   const o = objAt(tx, ty);
   if (o === O.CRATE) { openCrate(tx, ty); return; }
@@ -225,7 +233,7 @@ function hitObject(tx, ty, power, fx, fy) {
   burst(cx, cy - 4, o === O.ROCK ? '#a19e95' : o === O.SCRAP || o === O.CAR ? '#9a6640' : o === O.BUSH ? '#c4433a' : '#a47c4f', 4, 30);
   sfx(od.tool === 'pick' ? 'mine' : 'chop');
   if (W.hp[i] <= 0) {
-    for (const k in od.end || {}) gain(k, irnd(od.end[k][0], od.end[k][1]), cx, cy - 8);
+    for (const k in od.end || {}) { const n = irnd(od.end[k][0], od.end[k][1]); if (n > 0) gain(k, n, cx, cy - 8); }
     setObj(tx, ty, o === O.TREE || o === O.PINE ? O.STUMP : 0);
     if (od.regrow) S.regrow.push([i, o, S.day + od.regrow]);
     burst(cx, cy, '#6e5232', 10, 50);
@@ -233,8 +241,8 @@ function hitObject(tx, ty, power, fx, fy) {
   void fx; void fy;
 }
 const LOOT = {
-  casa: [['comida', 0.6, 1, 4], ['tecido', 0.55, 1, 3], ['madeira', 0.3, 2, 5], ['sucata', 0.4, 2, 5], ['municao', 0.22, 3, 8], ['curativo', 0.15, 1, 1], ['pecas', 0.12, 1, 1]],
-  'Supermercado': [['comida', 0.95, 3, 8], ['tecido', 0.6, 2, 4], ['curativo', 0.25, 1, 2], ['sucata', 0.3, 2, 4]],
+  casa: [['comida', 0.6, 1, 4], ['tecido', 0.55, 1, 3], ['madeira', 0.3, 2, 5], ['sucata', 0.4, 2, 5], ['municao', 0.22, 3, 8], ['curativo', 0.15, 1, 1], ['pecas', 0.12, 1, 1], ['sementes', 0.25, 1, 3]],
+  'Supermercado': [['comida', 0.95, 3, 8], ['tecido', 0.6, 2, 4], ['curativo', 0.25, 1, 2], ['sucata', 0.3, 2, 4], ['sementes', 0.6, 2, 5]],
   'Hospital': [['curativo', 0.8, 1, 3], ['tecido', 0.7, 2, 5], ['pecas', 0.3, 1, 2], ['comida', 0.3, 1, 3]],
   'Delegacia': [['municao', 0.85, 8, 20], ['sucata', 0.4, 3, 6], ['pecas', 0.25, 1, 2], ['curativo', 0.2, 1, 1]],
   'Posto de gasolina': [['sucata', 0.8, 4, 10], ['pecas', 0.45, 1, 2], ['comida', 0.4, 1, 4], ['tecido', 0.3, 1, 2]],
@@ -247,7 +255,7 @@ function openCrate(tx, ty) {
   for (const [k, ch, a, b] of table) if (Math.random() < ch) { got += gain(k, irnd(a, b), cx, cy - 10 * got); }
   const itemCh = poi ? (poi.n === 'Delegacia' ? 0.35 : 0.12) : 0.07;
   if (Math.random() < itemCh) {
-    const pool = poi && poi.n === 'Delegacia' ? ['pistol', 'shotgun', 'machete', 'helmet', 'vest', 'rifle'] : ['spear', 'bat', 'machete', 'axe2', 'pick2', 'helmet', 'armor', 'pistol'];
+    const pool = poi && poi.n === 'Delegacia' ? ['pistol', 'shotgun', 'machete', 'helmet', 'vest', 'rifle', 'smg'] : ['spear', 'bat', 'machete', 'axe2', 'pick2', 'helmet', 'armor', 'pistol', 'hammer', 'sledge'];
     const it = addItem(pick(pool), rollRarity(poi ? 2 : 1));
     say(`Achou: ${ITEMS[it.base].n} (${RAR[it.r].n})!`, it.r >= 2 ? 'rare' : 'good');
   }
@@ -273,10 +281,12 @@ function interactTarget() {
   let best = null, bd = 30;
   for (const n of S.npcs) { const d = dist(p.x, p.y, n.x, n.y); if (d < bd) { bd = d; best = { k: 'npc', e: n }; } }
   for (const s of S.surv) { const d = dist(p.x, p.y, s.x, s.y); if (d < bd - 4) { bd = d; best = { k: 'surv', e: s }; } }
+  for (const a of S.animals) { const d = dist(p.x, p.y, a.x, a.y); if (d < bd - 2) { bd = d; best = { k: 'animal', e: a }; } }
   const tx = tileOf(p.x), ty = tileOf(p.y - 4);
+  const USE = new Set([O.CRATE, O.BENCH, O.BENCH2, O.BENCH3, O.FARM, O.BED, O.CHEST, O.FRUIT, O.SAPLING]);
   for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
     const x = tx + dx, y = ty + dy, o = objAt(x, y);
-    if (!(o === O.CRATE || o === O.BENCH || o === O.FARM || o === O.BED || o === O.CHEST)) continue;
+    if (!USE.has(o)) continue;
     const d = dist(p.x, p.y - 4, x * TS + 8, y * TS + 8);
     if (d < bd) { bd = d; best = { k: 'tile', o, x, y }; }
   }
@@ -286,9 +296,17 @@ function interactLabel(t) {
   if (!t) return '';
   if (t.k === 'npc') return `Recrutar ${t.e.name} (${t.e.spec})`;
   if (t.k === 'surv') return `Falar com ${t.e.name}`;
+  if (t.k === 'animal') {
+    const a = t.e, d = ANIMALS[a.t];
+    if (!a.tame) return `Alimentar ${d.n.toLowerCase()} (${d.food} comida) · ${a.fed}/${d.feeds}`;
+    if (a.prod >= d.every) return `Pegar ${d.item}`;
+    return a.follow ? `${d.n}: ficar aqui` : `${d.n}: me seguir`;
+  }
   if (t.o === O.CRATE) return 'Abrir caixa';
-  if (t.o === O.BENCH) return 'Usar bancada';
+  if (OBJ[t.o].bench) return `Usar ${OBJ[t.o].n.toLowerCase()}`;
   if (t.o === O.FARM) return farmStage(idx(t.x, t.y)) >= 3 ? 'Colher' : 'Horta crescendo';
+  if (t.o === O.FRUIT) return fruitStage(idx(t.x, t.y)) >= 3 ? 'Colher frutas' : 'Árvore frutífera crescendo';
+  if (t.o === O.SAPLING) return 'Muda crescendo';
   if (t.o === O.BED) return 'Cama';
   if (t.o === O.CHEST) return 'Baú (+150 de espaço)';
   return '';
@@ -311,14 +329,15 @@ function recruit(n) {
 // ---------- Building ----------
 function canPlace(b, tx, ty) {
   if (!inb(tx, ty)) return 'Fora do mapa';
-  if (b.tier && S.bench < b.tier) return `Bancada nível ${b.tier}`;
+  if (b.tier && benchLevel() < b.tier) return `Precisa da ${BENCH_NAMES[b.tier]}`;
   if (dist(S.player.x, S.player.y, tx * TS + 8, ty * TS + 8) > 7 * TS) return 'Muito longe';
   const g = groundAt(tx, ty);
   if (g === G.WATER) return 'Na água não';
+  if (b.ground && g !== G.GRASS && g !== G.DIRT) return 'Só na terra ou na grama';
   const o = objAt(tx, ty);
   if (o && o !== O.STUMP) return 'Ocupado';
   if (OBJ[b.o].solid || OBJ[b.o].wall) {
-    const occupied = [S.player, ...Z, ...S.surv, ...S.npcs].some((e) => tileOf(e.x) === tx && (tileOf(e.y) === ty || tileOf(e.y - 3) === ty));
+    const occupied = [S.player, ...Z, ...S.surv, ...S.npcs, ...S.animals].some((e) => tileOf(e.x) === tx && (tileOf(e.y) === ty || tileOf(e.y - 3) === ty));
     if (occupied) return 'Alguém está aí';
   }
   if (!canPay(b.cost)) return 'Faltam recursos';
@@ -329,11 +348,18 @@ function place(b, tx, ty) {
   if (why) return why;
   pay(b.cost);
   setObj(tx, ty, b.o);
-  if (b.o === O.FARM) S.farms[idx(tx, ty)] = 0;
+  const i = idx(tx, ty);
+  if (b.o === O.FARM) S.farms[i] = 0;
+  if (OBJ[b.o].plant) { S.grow[i] = 0; S.stats.planted = (S.stats.planted || 0) + 1; }
   S.stats.built++;
   sfx('build');
-  burst(tx * TS + 8, ty * TS + 12, '#a47c4f', 5, 25);
+  burst(tx * TS + 8, ty * TS + 12, OBJ[b.o].plant ? '#7cb04a' : '#a47c4f', 5, 25);
   return null;
+}
+function clearTileState(i) {
+  delete S.farms[i];
+  delete S.grow[i];
+  for (const s of S.surv) if (s.bed === i) s.bed = null;
 }
 function dismantle(tx, ty) {
   const o = objAt(tx, ty);
@@ -343,9 +369,25 @@ function dismantle(tx, ty) {
   if (b) for (const k in b.cost) gain(k, Math.floor(b.cost[k] * 0.5));
   const i = idx(tx, ty);
   setObj(tx, ty, 0);
-  delete S.farms[i];
-  for (const s of S.surv) if (s.bed === i) s.bed = null;
+  clearTileState(i);
   sfx('break');
+}
+// Hammer: each hit restores 30% of the structure (more with better rarity) for 1 unit of its main material.
+function repair(tx, ty, it) {
+  const i = idx(tx, ty), o = W.obj[i], od = OBJ[o];
+  const b = BUILD.find((x) => x.o === o);
+  const mat = b ? Object.keys(b.cost).find((k) => ['madeira', 'pedra', 'sucata'].includes(k)) || Object.keys(b.cost)[0] : 'madeira';
+  if (S.res[mat] < 1) { say(`Falta ${RES[mat].toLowerCase()} para consertar.`, 'bad'); sfx('click'); return; }
+  S.res[mat]--;
+  const add = Math.min(od.hp - W.hp[i], Math.round(od.hp * 0.3 * RAR[it.r].m));
+  W.hp[i] += add;
+  S.stats.repaired = (S.stats.repaired || 0) + 1;
+  floatText(tx * TS + 8, ty * TS - 4, `+${add}`, '#9ad06a');
+  burst(tx * TS + 8, ty * TS + 6, '#e8dcb0', 4, 25);
+  FX.push({ swing: true, x: S.player.x, y: S.player.y - 6, a: Math.atan2(ty * TS + 8 - S.player.y, tx * TS + 8 - S.player.x), life: 0.15, r: 18 });
+  sfx('repair');
+  wearItem(it);
+  if (W.hp[i] >= od.hp) say(`${od.n} consertada.`, 'good');
 }
 const farmStage = (i) => { const g = S.farms[i] || 0; return g >= 120 ? 3 : g >= 70 ? 2 : g >= 25 ? 1 : 0; };
 function harvest(i, byWho) {
@@ -356,25 +398,70 @@ function harvest(i, byWho) {
   if (!byWho) sfx('pickup');
   return true;
 }
+// Saplings become trees; fruit trees grow, then give fruit again and again.
+const SAPLING_TIME = 240, FRUIT_GROWN = 170, FRUIT_RIPE = 300;
+const fruitStage = (i) => { const g = S.grow[i] || 0; return g >= FRUIT_RIPE ? 3 : g >= FRUIT_GROWN ? 2 : g >= 60 ? 1 : 0; };
+function harvestFruit(i, byWho) {
+  if (fruitStage(i) < 3) return false;
+  S.grow[i] = FRUIT_GROWN;
+  const x = (i % WW) * TS + 8, y = Math.floor(i / WW) * TS;
+  gain('comida', irnd(3, 5), x, y);
+  if (Math.random() < 0.4) gain('sementes', 1, x, y - 8);
+  if (!byWho) sfx('pickup');
+  return true;
+}
+function updatePlants(dt, boost) {
+  for (const k in S.grow) {
+    const i = Number(k), o = W.obj[i];
+    if (o !== O.SAPLING && o !== O.FRUIT) { delete S.grow[k]; continue; }
+    S.grow[k] = Math.min(FRUIT_RIPE, S.grow[k] + dt * boost);
+    if (o === O.SAPLING && S.grow[k] >= SAPLING_TIME) {
+      const x = i % WW, y = Math.floor(i / WW);
+      const blocked = [S.player, ...Z, ...S.surv, ...S.animals].some((e) => tileOf(e.x) === x && tileOf(e.y - 3) === y);
+      if (blocked) continue;
+      delete S.grow[k];
+      setObj(x, y, O.TREE);
+      burst(x * TS + 8, y * TS + 4, '#7cb04a', 8, 30);
+    }
+  }
+}
 function useTile(t) {
   if (t.o === O.CRATE) openCrate(t.x, t.y);
   else if (t.o === O.FARM) { if (!harvest(idx(t.x, t.y))) say('Ainda está crescendo.'); }
+  else if (t.o === O.FRUIT) { if (!harvestFruit(idx(t.x, t.y))) say('As frutas ainda não estão maduras.'); }
+  else if (t.o === O.SAPLING) say(`Vira árvore em uns ${Math.max(1, Math.ceil((SAPLING_TIME - (S.grow[idx(t.x, t.y)] || 0)) / 60))} min.`);
   else if (t.o === O.BED) say('Você renasce na cama se morrer. Sobreviventes também precisam de camas.');
   else if (t.o === O.CHEST) say(`Cada baú aumenta o limite de recursos em 150 (agora: ${capOf('madeira')}).`);
 }
 
 // ---------- Zombies ----------
+// Difficulty: zombies get tougher every day.
+function zScale(day) {
+  const d = day - 1;
+  return { hp: 1 + 0.12 * d + 0.004 * d * d, dmg: 1 + 0.06 * d, spd: 1 + Math.min(0.25, 0.012 * d) };
+}
+function threatOf(day) { let t = THREAT[0]; for (const x of THREAT) if (day >= x[0]) t = x; return t; }
+function zTypesFor(day) { return Object.keys(ZT).filter((k) => !ZT[k].boss && day >= ZT[k].from); }
+function pickZType(day, daytime) {
+  let types = zTypesFor(day);
+  if (daytime) types = types.filter((k) => ['comum', 'rastejante', 'veloz'].includes(k) || (day >= 10 && Math.random() < 0.15));
+  // ordinary zombies become a smaller share as days pass
+  return wpick(types.map((k) => [k, k === 'comum' ? Math.max(3, ZT.comum.w - day * 0.4) : ZT[k].w]));
+}
 function spawnZombie(type, tx, ty, night) {
   const d = ZT[type];
-  const sc = Math.pow(1.1, S.day - 1);
-  Z.push({ id: nextZid++, t: type, x: tx * TS + 8, y: ty * TS + 8, hp: d.hp * sc, max: d.hp * sc, spd: d.spd * rnd(0.9, 1.1), dmg: d.dmg * Math.pow(1.05, S.day - 1), r: d.r,
-    cd: 0, spitCd: 2, dir: 0, anim: Math.random() * 4, night, wx: 0, wy: 0, wt: 0, kb: [0, 0], atk: 0 });
+  const sc = zScale(S.day);
+  const hp = d.hp * sc.hp * (d.boss ? 1 + 0.1 * Math.floor(S.day / 5) : 1);
+  Z.push({ id: nextZid++, t: type, x: tx * TS + 8, y: ty * TS + 8, hp, max: hp, spd: d.spd * sc.spd * rnd(0.9, 1.1), dmg: d.dmg * sc.dmg, r: d.r,
+    cd: 0, spitCd: 2, dir: 0, anim: Math.random() * 4, night, wx: 0, wy: 0, wt: 0, kb: [0, 0], atk: 0, fuse: 0, rage: 0, scd: 0 });
 }
 function hurtZombie(z, dmg, kx = 0, ky = 0) {
+  const zt = ZT[z.t];
+  if (zt.armor) dmg = Math.max(1, dmg - zt.armor);
   z.hp -= dmg;
   z.kb = [kx, ky];
   z.flash = 0.12;
-  floatText(z.x, z.y - 18, String(Math.round(dmg)), '#f0e0c0');
+  floatText(z.x, z.y - 18, String(Math.round(dmg)), zt.armor ? '#b8c8dc' : '#f0e0c0');
   burst(z.x, z.y - 8, '#6a2a22', 3, 30);
   if (z.hp <= 0) killZombie(z);
 }
@@ -384,11 +471,36 @@ function killZombie(z) {
   Z.splice(i, 1);
   S.stats.kills++;
   burst(z.x, z.y - 6, '#5a2a22', 10, 50);
-  if (Math.random() < (ZT[z.t].boss ? 1 : 0.25)) {
-    const loot = ZT[z.t].boss ? { pecas: irnd(3, 5), municao: irnd(15, 30) } : pick([{ municao: irnd(2, 5) }, { tecido: 1 }, { sucata: irnd(1, 3) }, { comida: 1 }]);
+  const zt = ZT[z.t];
+  if (Math.random() < (zt.boss ? 1 : 0.25)) {
+    const loot = zt.boss ? { pecas: irnd(3, 5), municao: irnd(15, 30) } : pick([{ municao: irnd(2, 5) }, { tecido: 1 }, { sucata: irnd(1, 3) }, { comida: 1 }]);
     for (const k in loot) gain(k, loot[k], z.x, z.y);
   }
   sfx('zdie');
+  if (zt.boom) explode(z.x, z.y - 4, z.dmg * 4);
+}
+// Inchado: blows up when it dies or reaches you. Hurts everyone close and breaks structures.
+function explode(x, y, dmg) {
+  const R0 = 34;
+  for (let k = 0; k < 26; k++) { const a = Math.random() * 7, s = rnd(20, 90); FX.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 20, life: rnd(0.3, 0.7), col: pick(['#f0a040', '#e0603a', '#9cc060', '#5a4a30']) }); }
+  sfx('boom');
+  const p = S.player, f = (d) => 1 - (d / R0) * 0.5;
+  let d = dist(x, y, p.x, p.y - 6);
+  if (p.hp > 0 && d < R0) hurtPlayer(dmg * f(d));
+  for (const s of [...S.surv]) { d = dist(x, y, s.x, s.y - 6); if (d < R0) hurtSurv(s, dmg * f(d)); }
+  for (const a of [...S.animals]) { d = dist(x, y, a.x, a.y - 4); if (d < R0) hurtAnimal(a, dmg * f(d), true); }
+  for (const z of [...Z]) { d = dist(x, y, z.x, z.y - 6); if (d < R0) hurtZombie(z, dmg * 0.6 * f(d)); }
+  const tx = tileOf(x), ty = tileOf(y);
+  for (let yy = ty - 1; yy <= ty + 1; yy++) for (let xx = tx - 1; xx <= tx + 1; xx++) { const o = objAt(xx, yy); if (OBJ[o] && OBJ[o].build) damageStructure(xx, yy, dmg * 2.5); }
+}
+// Gritador: screams once it sees you; nearby zombies charge, and more come.
+function scream(z) {
+  z.scd = 25;
+  for (const o of Z) if (dist(o.x, o.y, z.x, z.y) < 12 * TS) { o.night = true; o.rage = 7; }
+  if (Z.length < 90) for (let k = 0; k < 2 + Math.floor(S.day / 8); k++) { const p = spawnPointAround(tileOf(z.x), tileOf(z.y), 6, 10); if (p) spawnZombie(pickZType(S.day, !isNight()), p[0], p[1], true); }
+  floatText(z.x, z.y - 24, 'AAAAH!', '#f2a497');
+  say('Um Gritador chamou a horda!', 'bad');
+  sfx('scream');
 }
 function spawnPointAround(cx, cy, r0, r1) {
   for (let t = 0; t < 40; t++) {
@@ -402,22 +514,22 @@ function startNight() {
   S.stats.nights++;
   const n = S.day;
   const [bx, by] = baseCenter();
-  const count = 2 + n * 2;
-  const types = Object.keys(ZT).filter((k) => !ZT[k].boss && n >= ZT[k].from);
+  const count = Math.min(44, 2 + n * 2);
   for (let i = 0; i < count; i++) {
     const p = spawnPointAround(bx, by, 20, 27);
-    if (p) spawnZombie(i < 2 ? 'comum' : pick(types), p[0], p[1], true);
+    if (p) spawnZombie(i < 2 ? 'comum' : pickZType(n, false), p[0], p[1], true);
   }
   if (n % 5 === 0) { const p = spawnPointAround(bx, by, 22, 26); if (p) spawnZombie('colosso', p[0], p[1], true); }
   say(n % 5 === 0 ? `Noite ${n}: uma horda com um Colosso está vindo!` : `Noite ${n}: a horda está vindo!`, 'bad');
+  const fresh = zTypesFor(n).filter((k) => ZT[k].from === n);
+  if (fresh.length) say(`Novo perigo esta noite: ${fresh.map((k) => ZT[k].n).join(', ')}.`, 'warn');
   sfx('alarm');
   S.secondWave = n >= 3 ? 40 : -1;
 }
 function secondWave() {
   const n = S.day;
   const [bx, by] = baseCenter();
-  const types = Object.keys(ZT).filter((k) => !ZT[k].boss && n >= ZT[k].from);
-  for (let i = 0; i < n; i++) { const p = spawnPointAround(bx, by, 20, 27); if (p) spawnZombie(pick(types), p[0], p[1], true); }
+  for (let i = 0; i < Math.min(24, n); i++) { const p = spawnPointAround(bx, by, 20, 27); if (p) spawnZombie(pickZType(n, false), p[0], p[1], true); }
 }
 function newDay() {
   S.day++;
@@ -446,7 +558,11 @@ function newDay() {
   }
   // night zombies wander off at dawn
   for (const z of Z) z.night = false;
+  // wild animals come back to the forest
+  if (S.animals.filter((a) => !a.tame).length < 12) spawnAnimals(3, false);
   say(`Dia ${S.day}. Você sobreviveu à noite.`, 'good');
+  const th = threatOf(S.day);
+  if (th[0] === S.day && S.day > 1) say(`Ameaça: ${th[1]}. Os zumbis estão mais fortes.`, 'warn');
   sfx('good');
 }
 
@@ -509,21 +625,26 @@ function updateZombies(dt) {
     if (Z.filter((z) => !z.night).length < dayCap) {
       const pt = spawnPointAround(tileOf(p.x), tileOf(p.y), 17, 30);
       const [bx, by] = baseCenter();
-      if (pt && dist(pt[0], pt[1], bx, by) > 12) spawnZombie(S.day >= 3 && Math.random() < 0.3 ? 'veloz' : 'comum', pt[0], pt[1], false);
+      if (pt && dist(pt[0], pt[1], bx, by) > 12) spawnZombie(pickZType(S.day, true), pt[0], pt[1], false);
     }
   }
   FF.t -= dt;
   if (FF.t <= 0) { FF.t = 0.35; buildFlowField(); }
   for (const z of [...Z]) {
+    if (!Z.includes(z)) continue; // removed by an explosion this frame
     const zt = ZT[z.t];
-    z.cd -= dt; z.flash = Math.max(0, (z.flash || 0) - dt);
+    z.cd -= dt; z.flash = Math.max(0, (z.flash || 0) - dt); z.rage = Math.max(0, (z.rage || 0) - dt); z.scd = Math.max(0, (z.scd || 0) - dt);
     if (z.kb[0] || z.kb[1]) { moveEnt(z, z.kb[0] * dt, z.kb[1] * dt, zSolidAt, z.r); z.kb = [z.kb[0] * 0.8, z.kb[1] * 0.8]; if (Math.abs(z.kb[0]) + Math.abs(z.kb[1]) < 2) z.kb = [0, 0]; }
+    // a lit fuse goes off no matter what
+    if (z.fuse > 0) { z.fuse -= dt; if (z.fuse <= 0) { z.hp = 0; killZombie(z); } continue; }
     const dp = dist(z.x, z.y, p.x, p.y);
     if (dp > 48 * TS) { Z.splice(Z.indexOf(z), 1); continue; }
-    // nearest living target among player and survivors
+    // nearest living target among player, survivors and tamed animals
     let tgt = p.hp > 0 ? p : null, td = tgt ? dp : Infinity;
     for (const s of S.surv) { const d = dist(z.x, z.y, s.x, s.y); if (d < td) { td = d; tgt = s; } }
-    const aggro = z.night || td < (isNight() ? 200 : 110);
+    for (const a of S.animals) { if (!a.tame) continue; const d = dist(z.x, z.y, a.x, a.y); if (d < td && d < 90) { td = d; tgt = a; } }
+    const aggro = z.night || z.rage > 0 || td < (isNight() ? 200 : 110);
+    if (zt.scream && z.scd <= 0 && tgt && td < 130 && lineClear(z.x, z.y - 6, tgt.x, tgt.y - 6)) scream(z);
     // spit attack
     if (zt.spit && tgt && td < zt.spit && lineClear(z.x, z.y - 6, tgt.x, tgt.y - 6)) {
       z.spitCd -= dt;
@@ -534,11 +655,12 @@ function updateZombies(dt) {
       }
       if (td < zt.spit * 0.6) continue;
     }
-    // melee
+    // melee (an Inchado lights its fuse instead)
     if (tgt && td < z.r + 9) {
+      if (zt.boom) { z.fuse = 0.8; sfx('fuse'); continue; }
       if (z.cd <= 0) {
         z.cd = 1; z.atk = 0.2;
-        if (tgt === p) hurtPlayer(z.dmg); else hurtSurv(tgt, z.dmg);
+        if (tgt === p) hurtPlayer(z.dmg); else if (tgt.t && ANIMALS[tgt.t]) hurtAnimal(tgt, z.dmg, true); else hurtSurv(tgt, z.dmg);
       }
       continue;
     }
@@ -557,6 +679,7 @@ function updateZombies(dt) {
           const nx = tx + bx, ny = ty + by;
           if (zSolidAt(nx, ny) && OBJ[objAt(nx, ny)] && OBJ[objAt(nx, ny)].build) {
             // structure in the way: attack it
+            if (zt.boom) { z.fuse = 0.8; sfx('fuse'); continue; }
             if (z.cd <= 0) { z.cd = 1; z.atk = 0.2; damageStructure(nx, ny, z.dmg * (zt.big ? 2 : 1)); }
             z.dir = dirOf(bx, by);
             continue;
@@ -571,7 +694,7 @@ function updateZombies(dt) {
     }
     const ml = Math.hypot(mx, my);
     if (ml > 0.01) {
-      const sp = z.spd * (aggro ? 1 : 0.4) * (S.player.hp <= 0 ? 0.5 : 1);
+      const sp = z.spd * (aggro ? 1 : 0.4) * (S.player.hp <= 0 ? 0.5 : 1) * (z.rage > 0 ? 1.35 : 1);
       moveEnt(z, mx / ml * sp * dt, my / ml * sp * dt, zSolidAt, z.r);
       z.dir = dirOf(mx, my);
       z.anim += dt * 6;
@@ -600,8 +723,7 @@ function damageStructure(tx, ty, dmg) {
   if (hp <= 0) {
     const o = W.obj[i];
     setObj(tx, ty, 0);
-    delete S.farms[i];
-    for (const s of S.surv) if (s.bed === i) s.bed = null;
+    clearTileState(i);
     say(`Os zumbis destruíram: ${OBJ[o].n}.`, 'bad');
     burst(tx * TS + 8, ty * TS + 8, '#6e5232', 12, 60);
   } else W.hp[i] = Math.round(hp);
@@ -715,6 +837,7 @@ function updateSurvivors(dt) {
   const night = isNight();
   const hasFarmer = S.surv.some((s) => s.spec === 'Agricultor');
   for (const i in S.farms) S.farms[i] = Math.min(140, S.farms[i] + dt * (hasFarmer ? 1.5 : 1));
+  updatePlants(dt, hasFarmer ? 1.3 : 1);
   for (const s of S.surv) {
     s.cd -= dt;
     s.hurt = Math.max(0, (s.hurt || 0) - dt);
@@ -764,26 +887,38 @@ function updateSurvivors(dt) {
     s.sleep = false;
     // work
     if (s.path && s.path.length) { walkPath(s, dt, 40); continue; }
+    // farmer: collect eggs, wool and milk from tamed animals
+    if (s.atask) {
+      const a = S.animals.find((x) => x.id === s.atask);
+      if (!a || !a.tame || a.follow || a.prod < ANIMALS[a.t].every) { s.atask = null; continue; }
+      if (dist(s.x, s.y, a.x, a.y) < 18) { if (s.cd <= 0) { s.cd = 1.2; a.prod = 0; const d = ANIMALS[a.t]; for (const k in d.prod) gain(k, d.prod[k], a.x, a.y - 10); s.atask = null; } }
+      else if (!goTo(s, tileOf(a.x), tileOf(a.y - 3), true)) s.atask = null;
+      continue;
+    }
     if (s.task) {
       const [tx, ty] = s.task;
       const o = objAt(tx, ty);
       const adj = Math.max(Math.abs(tx - stx), Math.abs(ty - sty)) <= 1;
-      const valid = s.spec === 'Agricultor' ? o === O.FARM && farmStage(idx(tx, ty)) >= 3 : OBJ[o] && OBJ[o].give && !OBJ[o].build;
+      const valid = s.spec === 'Agricultor' ? (o === O.FARM && farmStage(idx(tx, ty)) >= 3) || (o === O.FRUIT && fruitStage(idx(tx, ty)) >= 3) : OBJ[o] && OBJ[o].give && !OBJ[o].build;
       if (!valid) { s.task = null; continue; }
       if (!adj) { if (!goTo(s, tx, ty, true)) s.task = null; continue; }
       s.dir = dirOf(tx * TS + 8 - s.x, ty * TS + 8 - s.y);
       if (s.cd <= 0) {
         s.cd = 1.6;
-        if (s.spec === 'Agricultor') { harvest(idx(tx, ty), s); s.task = null; }
+        if (s.spec === 'Agricultor') { if (o === O.FRUIT) harvestFruit(idx(tx, ty), s); else harvest(idx(tx, ty), s); s.task = null; }
         else hitObject(tx, ty, 2, s.x, s.y);
       }
       continue;
     }
     if (s.cd > 0) continue;
     s.cd = 1.5;
+    if (s.spec === 'Agricultor') {
+      const a = S.animals.find((x) => x.tame && !x.follow && x.prod >= ANIMALS[x.t].every && Math.abs(tileOf(x.x) - home[0]) + Math.abs(tileOf(x.y) - home[1]) < 16);
+      if (a) { s.atask = a.id; continue; }
+    }
     const want = s.spec === 'Lenhador' ? (o) => o === O.TREE || o === O.PINE
       : s.spec === 'Minerador' ? (o) => o === O.ROCK || o === O.SCRAP
-      : s.spec === 'Agricultor' ? (o, i) => o === O.FARM && farmStage(i) >= 3 : null;
+      : s.spec === 'Agricultor' ? (o, i) => (o === O.FARM && farmStage(i) >= 3) || (o === O.FRUIT && fruitStage(i) >= 3) : null;
     if (want) {
       const t = nearestObj(home[0], home[1], 12, want);
       if (t) { s.task = t; continue; }
@@ -801,6 +936,105 @@ function updateNpcs(dt) {
       const nx = n.x + n.mx * 14 * dt, ny = n.y + n.my * 14 * dt;
       if (tileOf(nx) > hx && tileOf(nx) < hx + hw - 1 && tileOf(ny) > hy && tileOf(ny) < hy + hh - 1) { moveEnt(n, n.mx * 14 * dt, n.my * 14 * dt, solidAt, 3); n.dir = dirOf(n.mx, n.my); n.anim = (n.anim || 0) + dt * 6; }
     }
+  }
+}
+
+// ---------- Animals ----------
+function spawnAnimals(n, anywhere) {
+  const p = S.player;
+  for (let k = 0, made = 0; k < n * 40 && made < n; k++) {
+    const x = irnd(6, 98), y = irnd(6, WH - 7);
+    const g = groundAt(x, y);
+    if ((g !== G.GRASS && g !== G.DIRT) || solidAt(x, y) || objAt(x, y)) continue;
+    const dp = Math.hypot(x - tileOf(p.x), y - tileOf(p.y));
+    if (dp < (anywhere ? 9 : 22)) continue;
+    const t = wpick(Object.keys(ANIMALS).map((a) => [a, ANIMALS[a].w]));
+    // animals come in small groups
+    for (let j = 0; j < (t === 'galinha' ? 2 : 1) + (Math.random() < 0.4 ? 1 : 0) && made < n; j++) {
+      const [fx, fy] = freeTileNear(x + irnd(-1, 1), y + irnd(-1, 1), 2);
+      S.animals.push({ id: S.nextId++, t, x: fx * TS + 8, y: fy * TS + 10, hp: ANIMALS[t].hp, tame: false, fed: 0, follow: false, home: null, prod: 0, dir: 3, anim: 0, wt: 0, mx: 0, my: 0, flee: 0, hurt: 0 });
+      made++;
+    }
+  }
+}
+// Animals stop at walls, fences and closed gates, unless they are following you.
+function animalSolid(a) { return a.follow ? solidAt : (x, y) => solidAt(x, y) || !!(OBJ[objAt(x, y)] && OBJ[objAt(x, y)].door); }
+function hurtAnimal(a, dmg, byZombie) {
+  a.hp -= dmg;
+  a.hurt = 0.2;
+  if (!a.tame) a.flee = 3;
+  floatText(a.x, a.y - 14, `-${Math.round(dmg)}`, '#ff9a8a');
+  burst(a.x, a.y - 6, '#8a3a2a', 3, 25);
+  if (a.hp > 0) return;
+  S.animals = S.animals.filter((x) => x !== a);
+  const d = ANIMALS[a.t];
+  burst(a.x, a.y - 4, '#8a3a2a', 8, 40);
+  if (a.tame) say(`Os zumbis mataram sua ${d.n.toLowerCase()}.`, 'bad');
+  else if (!byZombie) gain('comida', d.meat, a.x, a.y - 8);
+}
+function feedAnimal(a) {
+  const d = ANIMALS[a.t];
+  if (S.res.comida < d.food) return say(`Precisa de ${d.food} comida para alimentar.`, 'bad');
+  S.res.comida -= d.food;
+  a.fed++;
+  a.flee = 0;
+  for (let k = 0; k < 3; k++) FX.push({ x: a.x + rnd(-4, 4), y: a.y - 12, vx: rnd(-8, 8), vy: -20, life: 0.8, txt: '♥', col: '#f07a8a' });
+  sfx('eat');
+  if (a.fed >= d.feeds) {
+    a.tame = true; a.follow = true; a.home = null; a.prod = d.every * 0.5;
+    S.stats.tamed = (S.stats.tamed || 0) + 1;
+    say(`${d.n} domesticada! Ela segue você. Aperte E para ela ficar num lugar.`, 'good');
+    sfx('good');
+  }
+}
+function useAnimal(a) {
+  const d = ANIMALS[a.t];
+  if (!a.tame) return feedAnimal(a);
+  if (a.prod >= d.every) {
+    a.prod = 0;
+    for (const k in d.prod) gain(k, d.prod[k], a.x, a.y - 10);
+    sfx('pickup');
+    return;
+  }
+  a.follow = !a.follow;
+  if (!a.follow) { a.home = [tileOf(a.x), tileOf(a.y - 3)]; say(`A ${d.n.toLowerCase()} fica aqui. Cerque com cerca para ela não sair.`); }
+  else { a.home = null; say(`A ${d.n.toLowerCase()} segue você.`); }
+}
+function updateAnimals(dt, boost) {
+  const p = S.player;
+  const running = p.moving && p.running;
+  for (const a of S.animals) {
+    const d = ANIMALS[a.t];
+    a.hurt = Math.max(0, a.hurt - dt);
+    if (a.tame) { a.prod = Math.min(d.every, a.prod + dt * boost); if (a.hp < d.hp) a.hp = Math.min(d.hp, a.hp + dt * 0.3); }
+    const dp = dist(a.x, a.y, p.x, p.y);
+    if (!a.tame && running && dp < 48) a.flee = Math.max(a.flee, 1.5);
+    a.flee = Math.max(0, a.flee - dt);
+    let mx = 0, my = 0, sp = d.spd;
+    if (a.tame && a.follow && p.hp > 0) {
+      if (dp > 20 * TS) { const [fx, fy] = freeTileNear(tileOf(p.x), tileOf(p.y), 3); a.x = fx * TS + 8; a.y = fy * TS + 10; }
+      else if (dp > 22) { mx = p.x - a.x; my = p.y - a.y; sp = Math.max(d.spd, dp > 60 ? 95 : 70); }
+    } else if (a.flee > 0) { mx = a.x - p.x; my = a.y - p.y; sp = d.spd * 2.2; }
+    else {
+      a.wt -= dt;
+      if (a.wt <= 0) {
+        a.wt = rnd(1.5, 4.5);
+        const ang = Math.random() * Math.PI * 2;
+        [a.mx, a.my] = Math.random() < 0.45 ? [0, 0] : [Math.cos(ang), Math.sin(ang)];
+        // tamed animals left somewhere stay close to that spot
+        if (a.tame && a.home) { const hx = a.home[0] * TS + 8 - a.x, hy = a.home[1] * TS + 10 - a.y; if (Math.hypot(hx, hy) > 3 * TS) { const l = Math.hypot(hx, hy); a.mx = hx / l; a.my = hy / l; } }
+      }
+      mx = a.mx; my = a.my; sp = d.spd * 0.5;
+    }
+    const l = Math.hypot(mx, my);
+    if (l > 0.01) {
+      const ox = a.x, oy = a.y;
+      moveEnt(a, mx / l * sp * dt, my / l * sp * dt, animalSolid(a), 3);
+      a.moving = Math.abs(a.x - ox) + Math.abs(a.y - oy) > 0.01;
+      if (Math.abs(mx) > 0.05) a.dir = mx < 0 ? 2 : 3;
+      a.anim += dt * 7;
+      if (!a.moving && !a.follow) a.wt = 0;
+    } else a.moving = false;
   }
 }
 
@@ -837,7 +1071,20 @@ function updatePlayer(dt) {
   if (KEYS.has('KeyS') || KEYS.has('ArrowDown')) my += 1;
   if (KEYS.has('KeyA') || KEYS.has('ArrowLeft')) mx -= 1;
   if (KEYS.has('KeyD') || KEYS.has('ArrowRight')) mx += 1;
-  const run = KEYS.has('ShiftLeft') || KEYS.has('ShiftRight');
+  // stamina: running drains it; when it runs out you must catch your breath before running again
+  if (p.stam === undefined) p.stam = 100;
+  const wantRun = KEYS.has('ShiftLeft') || KEYS.has('ShiftRight');
+  const run = wantRun && (mx || my) && !p.tired && p.stam > 0;
+  if (run) {
+    p.stam = Math.max(0, p.stam - STAM.drain * dt);
+    p.restT = STAM.delay;
+    if (p.stam <= 0) { p.tired = true; say('Sem fôlego! Espere a estamina voltar.', 'warn'); }
+  } else {
+    p.restT = Math.max(0, (p.restT || 0) - dt);
+    if (p.restT <= 0) p.stam = Math.min(100, p.stam + (mx || my ? STAM.regenWalk : STAM.regen) * dt * (p.hunger <= 0 ? 0.5 : 1));
+    if (p.tired && p.stam >= STAM.recover) p.tired = false;
+  }
+  p.running = !!run;
   if (mx || my) {
     const l = Math.hypot(mx, my), sp = (run ? 92 : 62) * (p.hunger <= 0 ? 0.7 : 1);
     const ox = p.x, oy = p.y;
@@ -848,7 +1095,7 @@ function updatePlayer(dt) {
     p.moving = true;
   } else p.moving = false;
   // hunger and health
-  p.hunger = Math.max(0, p.hunger - dt * (run && (mx || my) ? 0.32 : 0.2));
+  p.hunger = Math.max(0, p.hunger - dt * (run ? 0.32 : 0.2));
   if (p.hunger <= 0) { p.hp -= dt * 0.6; if (p.hp <= 0) playerDied(); }
   else if (p.hunger > 55 && p.hp < 100) p.hp = Math.min(100, p.hp + dt * 0.35);
   p.hurt = Math.max(0, (p.hurt || 0) - dt);
@@ -868,6 +1115,7 @@ function update(dt) {
   updateZombies(dt);
   updateBullets(dt);
   updateSurvivors(dt);
+  updateAnimals(dt, S.surv.some((s) => s.spec === 'Agricultor') ? 1.3 : 1);
   updateNpcs(dt);
   updateTurrets(dt);
   for (const f of [...FX]) { f.life -= dt; if (f.life <= 0) { FX.splice(FX.indexOf(f), 1); continue; } if (!f.swing) { f.x += f.vx * dt; f.y += f.vy * dt; if (!f.txt) f.vy += 120 * dt; } }
@@ -906,10 +1154,18 @@ function load() {
   } catch (e) { return false; }
   rebuildIndex();
   delete o.world;
-  const base = { stats: {}, farms: {}, regrow: [], surv: [], npcs: [], items: [], hotbar: [null, null, null, null, null, null] };
+  const base = { stats: {}, farms: {}, grow: {}, regrow: [], surv: [], npcs: [], animals: null, items: [], hotbar: [null, null, null, null, null, null] };
   for (const k in base) if (o[k] === undefined) o[k] = base[k];
   for (const k of RES_ORDER) if (typeof o.res[k] !== 'number') o.res[k] = 0;
+  if (typeof o.player.stam !== 'number') o.player.stam = 100;
   S = o;
-  for (const s of S.surv) { s.path = null; s.task = null; s.cd = 0; s.anim = 0; }
+  // worlds from 3.0: the bench level becomes a real stone bench or metal workshop
+  if (!S.v31) {
+    const lvl = S.bench || 1;
+    if (lvl >= 2) { const i = [...W.built].find((j) => W.obj[j] === O.BENCH); if (i !== undefined) setObj(i % WW, Math.floor(i / WW), lvl >= 3 ? O.BENCH3 : O.BENCH2); }
+    S.v31 = true;
+  }
+  if (!S.animals) { S.animals = []; spawnAnimals(16, false); }
+  for (const s of S.surv) { s.path = null; s.task = null; s.atask = null; s.cd = 0; s.anim = 0; }
   return true;
 }

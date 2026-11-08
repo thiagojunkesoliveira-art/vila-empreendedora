@@ -11,11 +11,11 @@ fabrica armas na bancada e enfrenta hordas de zumbis à noite. Projeto de uso pe
 
 | Tecla | O que faz |
 | --- | --- |
-| `W` `A` `S` `D` | Andar (`Shift` corre) |
-| Mouse (segurar o botão esquerdo) | Cortar árvores, quebrar pedras e sucata, atacar e atirar |
+| `W` `A` `S` `D` | Andar (`Shift` corre e gasta estamina) |
+| Mouse (segurar o botão esquerdo) | Cortar árvores, quebrar pedras e sucata, atacar, atirar e consertar (com o martelo) |
 | `1` a `6` ou roda do mouse | Trocar o item na mão |
-| `E` | Abrir caixas, usar a bancada, colher a horta, recrutar e falar com sobreviventes |
-| `B` | Modo construção (clique constrói, botão direito desmonta e devolve metade) |
+| `E` | Abrir caixas, usar bancadas, colher, recrutar, alimentar e cuidar dos animais |
+| `B` | Modo construção (`Q` troca de aba; clique constrói, botão direito desmonta e devolve metade) |
 | `Tab` | Inventário: vestir proteções, pôr itens na barra, desmontar |
 | `F` / `H` | Comer / usar curativo |
 | `M` | Mapa |
@@ -23,11 +23,18 @@ fabrica armas na bancada e enfrenta hordas de zumbis à noite. Projeto de uso pe
 
 - **Mundo**: floresta, lagos, cabanas e uma cidade em ruínas a leste, com supermercado, hospital,
   delegacia e posto de gasolina. Caixas aparecem de novo a cada dia e árvores voltam a crescer.
-- **Construção**: paredes de madeira e de pedra, porta, fogueira, tocha, bancada, cama, horta, baú,
-  estacas e torreta. Os zumbis tentam quebrar o que estiver no caminho.
-- **Bancada** (3 níveis): ferramentas, armas corpo a corpo, pistola, espingarda, rifle, capacete,
-  armaduras, munição e curativos. Cada item sai com uma raridade, de Comum a Lendário.
-- **Noite**: a cada noite vem uma horda maior. Há zumbis velozes, brutamontes, cuspidores e um Colosso a cada 5 noites.
+- **Construção** (abas Defesa, Base e Fazenda): paredes de madeira e de pedra que se conectam, porta, estacas,
+  torreta, fogueira, tocha, três bancadas, cama, baú, horta, mudas, árvores frutíferas, cerca e porteira.
+  Os zumbis tentam quebrar o que estiver no caminho; o **Martelo** conserta.
+- **Bancadas**: a de madeira faz ferramentas de pedra, martelo, lança e curativos; a **de pedra** faz ferramentas de ferro,
+  marreta, facão, pistola, proteção e munição; a **Oficina de metal** faz ferramentas de aço, espingarda, rifle,
+  submetralhadora e colete. Cada item sai com uma raridade, de Comum a Lendário.
+- **Fazenda e animais**: galinhas, ovelhas e vacas vivem na floresta. Alimente com comida (`E`) para domesticar;
+  depois elas dão ovos, lã (tecido) e leite. Use cercas e porteiras para segurá-las.
+- **Noite e dificuldade**: a cada dia os zumbis ficam mais fortes e aparecem tipos novos: rastejante, veloz, brutamonte,
+  cuspidor, blindado, inchado (explode), gritador (chama a horda) e um Colosso a cada 5 noites.
+- **Estamina**: correr gasta a barra azul; ela volta quando você anda ou para.
+- **Novidades**: a cada versão nova, o jogo mostra o "Patch de atualização" ao abrir (e no menu de pausa).
 - **Sobreviventes**: encontre pessoas nas casas e recrute com `E` (cada uma precisa de uma cama).
   Lenhadores cortam árvores, mineradores quebram pedras, agricultores colhem a horta e guardas lutam.
   Cada um come 2 de comida por dia.
@@ -67,24 +74,26 @@ Na versão de navegador, o backup é um código de texto: **Fazer backup** copia
 ## Publicar uma nova versão
 
 1. Faça as mudanças no jogo (`src/js/*.js`, `src/style.css`, `src/index.html`).
-2. Aumente o número em `"version"` no `package.json` (exemplo: `3.0.0` para `3.0.1`).
-3. Faça o commit e envie para a branch `main`:
+2. Aumente o número em `"version"` no `package.json` (exemplo: `3.1.0` para `3.1.1`).
+3. Em `src/js/data.js`, mude `GAME_VERSION` para o mesmo número e escreva as novidades no topo de `PATCHES`
+   (é o "Patch de atualização" que o jogo mostra ao abrir). A publicação para com um aviso se faltar isso.
+4. Faça o commit e envie para a branch `main`:
 
    ```bash
    git add -A
    ```
 
    ```bash
-   git commit -m "Versão 3.0.1"
+   git commit -m "Versão 3.1.1"
    ```
 
    ```bash
    git push
    ```
 
-4. O GitHub Actions monta o instalador e publica a release `v3.0.1` sozinho (leva uns 3 minutos).
+5. O GitHub Actions monta o instalador e publica a release `v3.1.1` sozinho (leva uns 3 minutos).
    Acompanhe na aba **Actions** do repositório.
-5. Na próxima vez que o app abrir, ele baixa a versão nova e pergunta se pode reiniciar.
+6. Na próxima vez que o app abrir, ele baixa a versão nova e pergunta se pode reiniciar.
 
 Se você enviar commits sem mudar a versão, nada é publicado (o workflow vê que a release já existe).
 Para publicar manualmente, abra **Actions > Publicar versão > Run workflow**.

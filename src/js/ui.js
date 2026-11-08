@@ -2,7 +2,8 @@
 // ================= Interface =================
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const UIS = { build: false, buildSel: 0, panel: null, target: null, buildWhy: null, surv: null, confirm: null, tutHidden: false };
+const UIS = { build: false, buildSel: 0, buildCat: 0, panel: null, target: null, buildWhy: null, surv: null, confirm: null, tutHidden: false, benchTier: 1, queue: [] };
+const catItems = (c) => BUILD.map((b, i) => i).filter((i) => BUILD[i].cat === c);
 const img = (k, cls = 'ico') => `<img class="${cls}" src="${iconURL(k)}" alt="">`;
 const fmtTime = (s) => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 function costHTML(c) {
@@ -24,10 +25,13 @@ function renderHUD() {
   $('vitals').innerHTML = `
     <div class="vit" title="Vida"><i class="vi hp"></i><div class="bar"><b style="width:${clamp(p.hp, 0, 100)}%" class="hpf${p.hp < 30 ? ' low' : ''}"></b></div><span>${Math.ceil(Math.max(0, p.hp))}</span></div>
     <div class="vit" title="Fome (F para comer)"><i class="vi food"></i><div class="bar"><b style="width:${p.hunger}%" class="hgf${p.hunger < 25 ? ' low' : ''}"></b></div><span>${Math.ceil(p.hunger)}</span></div>
+    <div class="vit" title="Estamina (Shift corre)"><i class="vi stam"></i><div class="bar"><b style="width:${clamp(p.stam, 0, 100)}%" class="stf${p.tired ? ' low' : ''}"></b></div><span>${Math.ceil(p.stam)}</span></div>
     <div class="res">${RES_ORDER.filter((k) => S.res[k] > 0 || ['madeira', 'pedra', 'sucata', 'comida'].includes(k)).map((k) => `<span title="${RES[k]} (limite ${capOf(k)})" class="${S.res[k] >= capOf(k) ? 'full' : ''}">${img(k)}${S.res[k]}</span>`).join('')}</div>`;
   const night = isNight();
   const toNight = (NIGHT_START - dayFrac()) * DAY_LEN, toDay = (1 - dayFrac()) * DAY_LEN;
+  const th = threatOf(S.day);
   $('clockt').innerHTML = `<b>Dia ${S.day}</b><span>${clockText()}</span>`;
+  $('threat').innerHTML = `Ameaça <b style="color:${th[2]}">${th[1]}</b>`;
   $('phase').innerHTML = night ? `<span class="nt">Amanhece em ${fmtTime(toDay)}</span>` : toNight < 60 ? `<span class="warn">A noite chega em ${fmtTime(toNight)}</span>` : `<span>Noite em ${fmtTime(toNight)}</span>`;
   $('phase').className = night ? 'phase night' : toNight < 60 ? 'phase soon' : 'phase';
   // tutorial
@@ -42,19 +46,25 @@ function renderHUD() {
   $('hotbar').innerHTML = S.hotbar.map((id, i) => {
     const it = id && itemById(id);
     const f = it ? it.dur / itemMax(it) : 0;
+    const gun = it && ITEMS[it.base].kind === 'gun';
     return `<button type="button" class="slot${S.sel === i ? ' on' : ''}" data-a="slot" data-v="${i}" title="${it ? esc(ITEMS[it.base].n) + ' (' + RAR[it.r].n + ')' : 'Mãos'}" ${it ? `style="--rc:${RAR[it.r].c}"` : ''}>
-      <em>${i + 1}</em>${it ? img(it.base, 'big') : ''}${it ? `<i class="dur" style="width:${f * 100}%;background:${f > 0.3 ? '#9ac46a' : '#e0604f'}"></i>` : ''}</button>`;
+      <em>${i + 1}</em>${it ? img(it.base, 'big') : ''}${gun ? `<i class="amm${S.res.municao ? '' : ' out'}">${S.res.municao}</i>` : ''}${it ? `<i class="dur" style="width:${f * 100}%;background:${f > 0.3 ? '#9ac46a' : '#e0604f'}"></i>` : ''}</button>`;
   }).join('');
   const it = heldItem();
-  $('held').textContent = it ? `${ITEMS[it.base].n}${it.r ? ' · ' + RAR[it.r].n : ''}` : 'Mãos';
-  $('held').style.color = it ? RAR[it.r].c : '';
-  // build bar
+  const held = $('held');
+  if (it && ITEMS[it.base].kind === 'gun') {
+    const n = S.res.municao;
+    held.innerHTML = `<span style="color:${RAR[it.r].c}">${esc(ITEMS[it.base].n)}</span><span class="ammo${n ? (n < 10 ? ' few' : '') : ' out'}">${img('municao')}<b>${n}</b> ${n === 1 ? 'bala' : 'balas'}</span>`;
+  } else held.innerHTML = it ? `<span style="color:${RAR[it.r].c}">${esc(ITEMS[it.base].n)}${it.r ? ' · ' + RAR[it.r].n : ''}</span>${ITEMS[it.base].kind === 'hammer' ? '<span class="hint">segure o clique numa construção danificada</span>' : ''}` : 'Mãos';
+  // build bar: three tabs, digits pick inside the open tab
   const bb = $('buildbar');
   if (UIS.build) {
     bb.classList.remove('hidden');
-    const b = BUILD[UIS.buildSel];
-    bb.innerHTML = `<div class="bitems">${BUILD.map((x, i) => `<button type="button" class="bi${i === UIS.buildSel ? ' on' : ''}${x.tier && S.bench < x.tier ? ' lock' : ''}${canPay(x.cost) ? '' : ' poor'}" data-a="bsel" data-v="${i}" title="${esc(OBJ[x.o].n)}"><em>${i < 9 ? i + 1 : 0}</em><img src="${iconURL(x.o)}" alt=""></button>`).join('')}</div>
-      <div class="binfo"><b>${OBJ[b.o].n}</b><span class="costs">${costHTML(b.cost)}</span><small>${esc(b.d)}${b.tier && S.bench < b.tier ? ` <span class="warn">Precisa da bancada nível ${b.tier}.</span>` : ''}</small>
+    if (BUILD[UIS.buildSel].cat !== UIS.buildCat) UIS.buildSel = catItems(UIS.buildCat)[0];
+    const b = BUILD[UIS.buildSel], lvl = benchLevel(), lockB = b.tier && lvl < b.tier;
+    bb.innerHTML = `<div class="bleft"><div class="btabs">${BUILD_CATS.map((c, i) => `<button type="button" class="${i === UIS.buildCat ? 'on' : ''}" data-a="bcat" data-v="${i}">${c}</button>`).join('')}<span class="muted">Q troca</span></div>
+      <div class="bitems">${catItems(UIS.buildCat).map((i, n) => { const x = BUILD[i]; return `<button type="button" class="bi${i === UIS.buildSel ? ' on' : ''}${x.tier && lvl < x.tier ? ' lock' : ''}${canPay(x.cost) ? '' : ' poor'}" data-a="bsel" data-v="${i}" title="${esc(OBJ[x.o].n)}"><em>${n + 1}</em><img src="${iconURL(x.o)}" alt=""></button>`; }).join('')}</div></div>
+      <div class="binfo"><b>${OBJ[b.o].n}</b><span class="costs">${costHTML(b.cost)}</span><small>${esc(b.d)}${lockB ? ` <span class="warn">Precisa da ${BENCH_NAMES[b.tier]}.</span>` : ''}</small>
       <small class="keys">Clique: construir · Botão direito: desmontar (devolve metade) · B: sair</small></div>`;
   } else bb.classList.add('hidden');
   // interaction prompt
@@ -91,7 +101,24 @@ function openPanel(kind, data) {
   renderPanel();
   $('panel').classList.remove('hidden');
 }
-function closePanel() { UIS.panel = null; UIS.confirm = null; $('panel').classList.add('hidden'); }
+function closePanel() {
+  if (UIS.panel === 'patch') markPatchSeen();
+  UIS.panel = null; UIS.confirm = null; $('panel').classList.add('hidden');
+  if (UIS.queue.length) openPanel(UIS.queue.shift());
+}
+// ---------- Update notes ("Patch de atualização") ----------
+const PATCH_SEEN = 'ultimo-abrigo-novidades-vistas';
+function markPatchSeen() { try { localStorage.setItem(PATCH_SEEN, GAME_VERSION); } catch (e) {} }
+function patchUnseen() { try { return localStorage.getItem(PATCH_SEEN) !== GAME_VERSION; } catch (e) { return false; } }
+function patchPanel() {
+  const cur = PATCHES[0];
+  const older = PATCHES.slice(1);
+  const list = (p) => p.groups.map(([g, items]) => `<h3>${esc(g)}</h3><ul class="pl">${items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>`).join('');
+  return `<div class="ph"><div><small class="kicker">Patch de atualização · versão ${esc(cur.v)}</small><h2>${esc(cur.title)}</h2></div><button type="button" class="x" data-a="close" title="Fechar (Esc)">×</button></div>
+    ${list(cur)}
+    ${older.map((p) => `<details><summary>Versão ${esc(p.v)}: ${esc(p.title)}</summary>${list(p)}</details>`).join('')}
+    <button type="button" class="btn go wide" data-a="close">Jogar</button>`;
+}
 function renderPanel() {
   const k = UIS.panel;
   const box = $('pbox');
@@ -103,25 +130,36 @@ function renderPanel() {
   else if (k === 'menu') box.innerHTML = menuPanel();
   else if (k === 'map') { box.innerHTML = `<div class="ph"><h2>Mapa</h2><button type="button" class="x" data-a="close">×</button></div><canvas id="bigmap" width="600" height="600"></canvas><p class="muted small">Amarelo: sobreviventes para recrutar · Laranja: sua base · Branco: você</p>`; drawBigMap(); }
   else if (k === 'help' || k === 'welcome') box.innerHTML = helpPanel(k === 'welcome');
+  else if (k === 'patch') box.innerHTML = patchPanel();
   else if (k === 'backup') box.innerHTML = UIS.backupHTML || '';
 }
 function header(t, sub) { return `<div class="ph"><div><h2>${t}</h2>${sub ? `<small>${sub}</small>` : ''}</div><button type="button" class="x" data-a="close" title="Fechar (Esc)">×</button></div>`; }
+// Each bench makes its own recipes and those of the simpler benches.
 function benchPanel() {
-  const up = BENCH_UP[S.bench + 1];
-  const group = (title, keys) => `<h3>${title}</h3><div class="recs">${keys.map((key) => {
-    const d = ITEMS[key], lock = d.tier > S.bench, ok = !lock && canPay(d.cost);
+  const tier = UIS.benchTier;
+  const lockLabel = (t) => (t === 2 ? 'Bancada de pedra' : 'Oficina de metal');
+  const rec = (key) => {
+    const d = ITEMS[key], lock = d.tier > tier, ok = !lock && canPay(d.cost);
     return `<div class="rec${lock ? ' lock' : ''}">${img(key, 'big')}<div class="rt"><b>${d.n}</b><small>${statLine(key)}</small><span class="costs">${costHTML(d.cost)}</span></div>
-      <button type="button" class="btn${ok ? ' go' : ''}" data-a="craft" data-v="${key}"${ok ? '' : ' disabled'}>${lock ? 'Nível ' + d.tier : 'Fazer'}</button></div>`;
-  }).join('')}</div>`;
-  const makes = MAKES.map((m) => {
-    const lock = m.tier > S.bench, ok = !lock && canPay(m.cost);
+      <button type="button" class="btn${ok ? ' go' : ''}" data-a="craft" data-v="${key}"${ok ? '' : ' disabled'}>${lock ? lockLabel(d.tier) : 'Fazer'}</button></div>`;
+  };
+  const make = (m) => {
+    const lock = m.tier > tier, ok = !lock && canPay(m.cost);
     return `<div class="rec${lock ? ' lock' : ''}">${img(m.id, 'big')}<div class="rt"><b>${m.n}</b><span class="costs">${costHTML(m.cost)}</span></div>
-      <button type="button" class="btn${ok ? ' go' : ''}" data-a="make" data-v="${m.id}"${ok ? '' : ' disabled'}>${lock ? 'Nível ' + m.tier : 'Fazer'}</button></div>`;
-  }).join('');
-  return `${header('Bancada', `Nível ${S.bench} de 3 · A raridade é sorteada ao fabricar; bancadas melhores dão mais sorte`)}
-    ${up ? `<div class="upg"><span>Melhorar para o nível ${S.bench + 1}</span><span class="costs">${costHTML(up)}</span><button type="button" class="btn${canPay(up) ? ' go' : ''}" data-a="benchup"${canPay(up) ? '' : ' disabled'}>Melhorar</button></div>` : ''}
-    <div class="cols2"><div>${group('Ferramentas', ['axe1', 'pick1', 'axe2', 'pick2'])}${group('Proteção', ['helmet', 'armor', 'vest'])}</div>
-    <div>${group('Armas', ['spear', 'bat', 'machete', 'pistol', 'shotgun', 'rifle'])}<h3>Suprimentos</h3><div class="recs">${makes}</div></div></div>`;
+      <button type="button" class="btn${ok ? ' go' : ''}" data-a="make" data-v="${m.id}"${ok ? '' : ' disabled'}>${lock ? lockLabel(m.tier) : 'Fazer'}</button></div>`;
+  };
+  const kinds = { Ferramentas: ['axe', 'pick', 'hammer'], Armas: ['melee', 'gun'], 'Proteção': ['head', 'body'] };
+  const group = (title) => {
+    const keys = Object.keys(ITEMS).filter((k) => kinds[title].includes(ITEMS[k].kind)).sort((a, b) => ITEMS[a].tier - ITEMS[b].tier);
+    // show what this bench makes, plus a peek at the next bench's recipes
+    const shown = keys.filter((k) => ITEMS[k].tier <= tier + 1);
+    return `<h3>${title}</h3><div class="recs">${shown.map(rec).join('')}</div>`;
+  };
+  const next = tier < 3 ? BUILD.find((b) => b.o === BENCH_OBJ[tier + 1]) : null;
+  return `${header(BENCH_NAMES[tier], 'A raridade é sorteada ao fabricar; bancadas melhores dão mais sorte')}
+    ${next ? `<div class="upg"><span>Próxima: ${OBJ[next.o].n}</span><span class="costs">${costHTML(next.cost)}</span><small class="muted">Construa com B, aba Base</small></div>` : ''}
+    <div class="cols2"><div>${group('Ferramentas')}${group('Proteção')}</div>
+    <div>${group('Armas')}<h3>Suprimentos</h3><div class="recs">${MAKES.filter((m) => m.tier <= tier + 1).map(make).join('')}</div></div></div>`;
 }
 function invPanel() {
   const eq = (id, label) => { const it = id && itemById(id); return `<div class="eq">${it ? img(it.base, 'big') : '<span class="emp"></span>'}<div><small>${label}</small><b style="color:${it ? RAR[it.r].c : ''}">${it ? ITEMS[it.base].n : 'Nada'}</b></div>${it ? `<button type="button" class="btn sm" data-a="unwear" data-v="${it.id}">Tirar</button>` : ''}</div>`; };
@@ -155,6 +193,7 @@ function menuPanel() {
       <button type="button" class="btn" data-a="save">Salvar agora</button>
       <button type="button" class="btn" data-a="openmap">Mapa (M)</button>
       <button type="button" class="btn" data-a="help">Controles</button>
+      <button type="button" class="btn" data-a="patch">Novidades da versão ${esc(GAME_VERSION)}</button>
       <button type="button" class="btn" data-a="sound">Som: ${S.sound ? 'ligado' : 'desligado'}</button>
       <h3>Backup</h3>
       <button type="button" class="btn" data-a="backup">Fazer backup</button>
@@ -168,11 +207,11 @@ function menuPanel() {
 function helpPanel(welcome) {
   return `${welcome ? `<div class="ph"><div><h2>Último Abrigo</h2><small>Sobreviva, construa, resista.</small></div></div><p>O mundo caiu. Você acordou num acampamento no meio da floresta, com uma fogueira e nada mais. A leste há uma cidade em ruínas, cheia de suprimentos e de zumbis. À noite, eles vêm atrás de você.</p>` : header('Controles')}
     <div class="ctrl">
-      <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>Andar (<kbd>Shift</kbd> corre)</span>
-      <span><kbd>Mouse</kbd></span><span>Segurar o botão esquerdo: cortar, quebrar, atacar e atirar</span>
+      <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>Andar (<kbd>Shift</kbd> corre e gasta estamina)</span>
+      <span><kbd>Mouse</kbd></span><span>Segurar o botão esquerdo: cortar, quebrar, atacar, atirar e consertar (com o martelo)</span>
       <span><kbd>1</kbd>–<kbd>6</kbd></span><span>Trocar o item na mão (ou a roda do mouse)</span>
-      <span><kbd>E</kbd></span><span>Usar: abrir caixas, bancada, colher, recrutar</span>
-      <span><kbd>B</kbd></span><span>Construir (botão direito desmonta)</span>
+      <span><kbd>E</kbd></span><span>Usar: abrir caixas, bancada, colher, recrutar, alimentar animais</span>
+      <span><kbd>B</kbd></span><span>Construir (<kbd>Q</kbd> troca de aba, botão direito desmonta)</span>
       <span><kbd>Tab</kbd></span><span>Inventário</span>
       <span><kbd>F</kbd> / <kbd>H</kbd></span><span>Comer / usar curativo</span>
       <span><kbd>M</kbd></span><span>Mapa</span>
@@ -249,6 +288,10 @@ function sfx(n) {
     case 'lose': [330, 262, 196].forEach((f, i) => tone(f, 0.25, 'sawtooth', 0.04, i * 0.18)); break;
     case 'thud': noise(0.06, 0.03, 0, 200); break;
     case 'click': tone(400, 0.04, 'square', 0.02); break;
+    case 'repair': tone(520, 0.04, 'square', 0.03); noise(0.04, 0.05, 0, 2500); break;
+    case 'boom': noise(0.5, 0.16, 0, 120); tone(70, 0.4, 'sawtooth', 0.06, 0, -40); break;
+    case 'fuse': noise(0.3, 0.03, 0, 4000); break;
+    case 'scream': tone(700, 0.5, 'sawtooth', 0.04, 0, 500); tone(520, 0.5, 'sawtooth', 0.03, 0.05, 300); break;
     default: break;
   }
 }
@@ -313,9 +356,10 @@ const ACT = {
   tuthide: () => { UIS.tutHidden = true; toast('Tutorial escondido. Ele volta ao reabrir o jogo.'); },
   slot: (d) => { S.sel = Number(d.v); },
   bsel: (d) => { UIS.buildSel = Number(d.v); },
-  craft: (d) => { craftItem(d.v); renderPanel(); },
-  make: (d) => { craftMake(MAKES.find((m) => m.id === d.v)); renderPanel(); },
-  benchup: () => { upgradeBench(); renderPanel(); },
+  bcat: (d) => { UIS.buildCat = Number(d.v); UIS.buildSel = catItems(UIS.buildCat)[0]; },
+  craft: (d) => { craftItem(d.v, UIS.benchTier); renderPanel(); },
+  make: (d) => { craftMake(MAKES.find((m) => m.id === d.v), UIS.benchTier); renderPanel(); },
+  patch: () => openPanel('patch'),
   wear: (d) => { const it = itemById(Number(d.v)); if (!it) return; if (ITEMS[it.base].kind === 'head') S.head = it.id; else S.body = it.id; renderPanel(); },
   unwear: (d) => { const id = Number(d.v); if (S.head === id) S.head = null; if (S.body === id) S.body = null; renderPanel(); },
   tobar: (d) => { const id = Number(d.v); S.hotbar = S.hotbar.map((h) => (h === id ? null : h)); for (const s of S.surv) if (s.item === id) s.item = null; S.hotbar[S.sel] = id; renderPanel(); },
@@ -369,15 +413,16 @@ function onKey(e) {
     return;
   }
   if (c === 'Tab') { e.preventDefault(); if (UIS.panel === 'inv') closePanel(); else if (!UIS.panel) openPanel('inv'); return; }
-  if (UIS.panel) { if (c === 'KeyM' && UIS.panel === 'map') closePanel(); if (c === 'KeyE' && UIS.panel === 'bench') closePanel(); return; }
+  if (UIS.panel) { if (c === 'KeyM' && UIS.panel === 'map') closePanel(); if (c === 'KeyE' && UIS.panel === 'bench') closePanel(); if (c === 'Enter' && (UIS.panel === 'patch' || UIS.panel === 'welcome')) closePanel(); return; }
   if (S.player.hp <= 0) return;
   KEYS.add(c);
   if (c.startsWith('Digit')) {
     const n = Number(c.slice(5));
-    if (UIS.build) { const i = n === 0 ? 9 : n - 1; if (BUILD[i]) UIS.buildSel = i; }
+    if (UIS.build) { const list = catItems(UIS.buildCat); if (n >= 1 && list[n - 1] !== undefined) UIS.buildSel = list[n - 1]; }
     else if (n >= 1 && n <= 6) S.sel = n - 1;
   }
   if (c === 'KeyB') { UIS.build = !UIS.build; mouseDown = false; }
+  if (c === 'KeyQ' && UIS.build) { UIS.buildCat = (UIS.buildCat + 1) % BUILD_CATS.length; UIS.buildSel = catItems(UIS.buildCat)[0]; }
   if (c === 'KeyI') openPanel('inv');
   if (c === 'KeyM') openPanel('map');
   if (c === 'KeyF') eat();
@@ -387,7 +432,8 @@ function onKey(e) {
     if (!t) return;
     if (t.k === 'npc') recruit(t.e);
     else if (t.k === 'surv') openPanel('surv', t.e.id);
-    else if (t.o === O.BENCH) openPanel('bench');
+    else if (t.k === 'animal') useAnimal(t.e);
+    else if (OBJ[t.o].bench) { UIS.benchTier = OBJ[t.o].bench; openPanel('bench'); }
     else useTile(t);
   }
   renderHUD();
@@ -419,7 +465,7 @@ $('cv').addEventListener('contextmenu', (e) => e.preventDefault());
 $('cv').addEventListener('wheel', (e) => {
   if (UIS.panel) return;
   const d = e.deltaY > 0 ? 1 : -1;
-  if (UIS.build) UIS.buildSel = (UIS.buildSel + d + BUILD.length) % BUILD.length;
+  if (UIS.build) { const list = catItems(UIS.buildCat), k = Math.max(0, list.indexOf(UIS.buildSel)); UIS.buildSel = list[(k + d + list.length) % list.length]; }
   else S.sel = (S.sel + d + 6) % 6;
   e.preventDefault();
 }, { passive: false });

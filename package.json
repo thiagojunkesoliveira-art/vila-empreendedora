@@ -1,7 +1,7 @@
 {
   "name": "vila-empreendedora",
   "productName": "Vila Empreendedora",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Último Abrigo: sobrevivência zumbi em mundo aberto, com pixel art. Colete, construa sua base e resista às hordas.",
   "main": "main.js",
   "author": "Vila Empreendedora",

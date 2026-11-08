@@ -2,7 +2,14 @@
 // ================= Drawing =================
 const R = { zoom: 3, w: 0, h: 0, camX: 0, camY: 0, t: 0, chunks: new Map(), light: null, lctx: null };
 const CH = 16; // chunk size in tiles
-const FLAT = new Set([O.FARM, O.BED, O.SPIKES, O.STUMP]);
+const FLAT = new Set([O.FARM, O.BED, O.SPIKES, O.STUMP, O.SAPLING]);
+const WALL_SET = new Set([O.WALL_W, O.WALL_S, O.DOOR]);
+const FENCE_SET = new Set([O.FENCE, O.GATE, O.WALL_W, O.WALL_S, O.DOOR]);
+// Which neighbors connect: 1 north, 2 east, 4 south, 8 west.
+function maskOf(tx, ty, set) {
+  return (set.has(objAt(tx, ty - 1)) ? 1 : 0) | (set.has(objAt(tx + 1, ty)) ? 2 : 0) | (set.has(objAt(tx, ty + 1)) ? 4 : 0) | (set.has(objAt(tx - 1, ty)) ? 8 : 0);
+}
+const RUIN_SET = new Set([O.RUIN]);
 let cv, ctx;
 
 function resize() {
@@ -46,11 +53,17 @@ function drawObj(o, tx, ty, i) {
     case O.CAR: ctx.drawImage(SPR.car[v], x, y); break;
     case O.BUSH: ctx.drawImage(SPR.bush, x, y + 3); break;
     case O.CRATE: ctx.drawImage(SPR.crate, x + 1, y + 1); break;
-    case O.RUIN: ctx.drawImage(SPR.ruin, x, y - 6); break;
+    case O.RUIN: ctx.drawImage(wallSprite('ruin', maskOf(tx, ty, RUIN_SET)), x, y - 6); break;
     case O.STUMP: ctx.drawImage(SPR.stump, x + 2, y + 5); break;
-    case O.WALL_W: ctx.drawImage(SPR.wallW, x, y - 6); break;
-    case O.WALL_S: ctx.drawImage(SPR.wallS, x, y - 6); break;
-    case O.DOOR: ctx.drawImage(SPR.door, x, y - 6); break;
+    case O.WALL_W: ctx.drawImage(wallSprite('wood', maskOf(tx, ty, WALL_SET)), x, y - 6); break;
+    case O.WALL_S: ctx.drawImage(wallSprite('stone', maskOf(tx, ty, WALL_SET)), x, y - 6); break;
+    case O.DOOR: ctx.drawImage(doorSprite(maskOf(tx, ty, WALL_SET)), x, y - 6); break;
+    case O.FENCE: ctx.drawImage(fenceSprite(maskOf(tx, ty, FENCE_SET)), x, y - 6); break;
+    case O.GATE: ctx.drawImage(fenceSprite(maskOf(tx, ty, FENCE_SET), true), x, y - 6); break;
+    case O.BENCH2: ctx.drawImage(SPR.bench2, x, y); break;
+    case O.BENCH3: ctx.drawImage(SPR.bench3, x, y); break;
+    case O.SAPLING: ctx.drawImage(SPR.sapling, x + 2, y + 3); break;
+    case O.FRUIT: ctx.drawImage(SPR.fruit[fruitStage(i)], x - 3, y - 12); break;
     case O.FIRE: ctx.drawImage(SPR.fire[Math.floor(R.t * 8 + tx) % 3], x, y - 2); break;
     case O.TORCH: ctx.drawImage(SPR.torch[Math.floor(R.t * 7 + ty) % 3], x + 4, y); break;
     case O.BENCH: ctx.drawImage(SPR.bench, x, y); break;
@@ -74,35 +87,99 @@ function drawObj(o, tx, ty, i) {
     ctx.fillStyle = f > 0.5 ? '#9ac46a' : f > 0.25 ? '#e0a64a' : '#e05a4a'; ctx.fillRect(x + 2, y - 9, Math.max(1, 12 * f), 2);
   }
 }
-function drawChar(e, key, scale = 1) {
+const animFrame = (e) => { const moving = e.moving !== undefined ? e.moving : true; return moving && e.anim ? (Math.floor(e.anim) % 2) + 1 : 0; };
+function drawChar(e, key, scale = 1, squash = 1) {
   const fr = charFrames(key);
-  const moving = e.moving !== undefined ? e.moving : true;
-  const f = moving && e.anim ? (Math.floor(e.anim) % 2) + 1 : 0;
-  const img = fr[e.dir || 0][f];
+  const img = fr[e.dir || 0][animFrame(e)];
   const x = Math.round(e.x - R.camX), y = Math.round(e.y - R.camY);
   ctx.fillStyle = 'rgba(0,0,0,.28)';
   ctx.beginPath(); ctx.ellipse(x, y, 5 * scale, 2 * scale, 0, 0, 7); ctx.fill();
   if (e.flash > 0 || e.hurt > 0) ctx.filter = 'brightness(2.2)';
-  const w = 16 * scale, h = 18 * scale;
+  const w = 16 * scale, h = Math.round(18 * scale * squash);
   ctx.drawImage(img, Math.round(x - w / 2), Math.round(y - h + 1), w, h);
   ctx.filter = 'none';
   return { x, y };
 }
-function drawHeld(p, x, y) {
-  const it = heldItem();
-  const key = it ? it.base : null;
-  if (!key) return;
-  const icon = ICON[key];
-  let ang = Math.atan2(mouseW.y - (p.y - 6), mouseW.x - p.x);
-  const swing = actCd > 0 && ITEMS[key].kind !== 'gun' ? Math.sin(Math.max(0, actCd) * 12) * 0.9 : 0;
-  ang += swing;
+// The hand that holds the item, in screen pixels, following the walk animation.
+function handPos(e, x, y) {
+  const f = animFrame(e), step = f === 1 ? 1 : f === 2 ? -1 : 0;
+  if ((e.dir || 0) < 2) return [x + 4, y - 7 - (step < 0 ? 1 : 0)];
+  return [x + 1 + step, y - 6];
+}
+// Is the held item drawn behind the body (character seen from the back, or aiming up)?
+function heldBehind(e, aim) {
+  if (aim !== null && aim !== undefined) return Math.sin(aim) < -0.4;
+  return (e.dir || 0) === 1;
+}
+// swing: progress 0..1 of a melee swing, or -1. aim: gun angle while shooting, or null.
+// At rest the sprite is not rotated, so it stays crisp and still in the hand.
+function drawHeldItem(e, base, x, y, swing, aim, recoil) {
+  const d = ITEMS[base];
+  if (!d || d.kind === 'head' || d.kind === 'body') return;
+  const spr = heldSprite(base);
+  const dir = e.dir || 0;
+  const [hx, hy] = handPos(e, x, y);
   ctx.save();
-  ctx.translate(x + Math.cos(ang) * 5, y - 8 + Math.sin(ang) * 3);
-  const gun = ITEMS[key].kind === 'gun';
-  ctx.rotate(gun ? ang : ang + Math.PI / 4);
-  if (gun && Math.cos(ang) < 0) ctx.scale(1, -1);
-  ctx.drawImage(icon, -4, -8, 12, 12);
+  ctx.translate(hx, hy);
+  if (d.kind === 'gun') {
+    let a = dir === 0 ? Math.PI / 2 : dir === 1 ? -Math.PI / 2 : 0, mirror = dir === 2;
+    if (aim !== null) {
+      const q = Math.round(aim / (Math.PI / 8)) * (Math.PI / 8);
+      mirror = Math.cos(q) < -0.01;
+      a = mirror ? Math.PI - q : q;
+    }
+    if (mirror) ctx.scale(-1, 1);
+    if (a) ctx.rotate(a);
+    ctx.drawImage(spr, -4 - recoil, -8);
+  } else {
+    let s = 0;
+    if (swing >= 0) s = swing < 0.3 ? -0.8 + 2.4 * Math.sin((swing / 0.3) * Math.PI / 2) : 1.6 * (1 - (swing - 0.3) / 0.7);
+    if (dir === 1) s = -s;
+    if (dir === 2) ctx.scale(-1, 1);
+    if (s) ctx.rotate(s);
+    ctx.drawImage(spr, -5, -9);
+  }
   ctx.restore();
+}
+function playerHeldState(p) {
+  const it = heldItem();
+  if (!it) return null;
+  const d = ITEMS[it.base];
+  const aiming = d.kind === 'gun' && mouseDown && !UIS.build && !UIS.panel;
+  const aim = aiming ? Math.atan2(mouseW.y - (p.y - 6), mouseW.x - p.x) : null;
+  const cd = 1 / (d.spd || 1);
+  const swing = d.kind !== 'gun' && actCd > 0 ? clamp(1 - actCd / cd, 0, 1) : -1;
+  const recoil = d.kind === 'gun' && actCd > cd - 0.07 ? 2 : 0;
+  return { base: it.base, aim, swing, recoil };
+}
+function drawPlayer(p) {
+  const h = playerHeldState(p);
+  const x = Math.round(p.x - R.camX), y = Math.round(p.y - R.camY);
+  const behind = h && heldBehind(p, h.aim);
+  if (h && behind) drawHeldItem(p, h.base, x, y, h.swing, h.aim, h.recoil);
+  drawChar(p, 'player');
+  if (h && !behind) drawHeldItem(p, h.base, x, y, h.swing, h.aim, h.recoil);
+}
+function drawHeart(x, y, col = '#e0604f') {
+  ctx.fillStyle = col;
+  ctx.fillRect(x, y, 2, 1); ctx.fillRect(x + 3, y, 2, 1); ctx.fillRect(x, y + 1, 5, 1); ctx.fillRect(x + 1, y + 2, 3, 1); ctx.fillRect(x + 2, y + 3, 1, 1);
+}
+function drawAnimal(a) {
+  const fr = SPR.animal[a.t];
+  const img = fr[a.moving ? Math.floor(a.anim || 0) % 2 : 0][a.dir === 2 ? 1 : 0];
+  const x = Math.round(a.x - R.camX), y = Math.round(a.y - R.camY);
+  ctx.fillStyle = 'rgba(0,0,0,.25)';
+  ctx.beginPath(); ctx.ellipse(x, y, img.width / 2.6, 2, 0, 0, 7); ctx.fill();
+  if (a.hurt > 0) ctx.filter = 'brightness(2.2)';
+  ctx.drawImage(img, x - (img.width >> 1), y - img.height + 1);
+  ctx.filter = 'none';
+  const top = y - img.height - 2;
+  const d = ANIMALS[a.t];
+  if (a.tame && a.prod >= d.every) {
+    ctx.fillStyle = 'rgba(18,18,14,.8)'; ctx.fillRect(x - 6, top - 10, 12, 11);
+    ctx.drawImage(ICON[d.item], x - 5, top - 9, 10, 10);
+  } else if (a.tame && a.follow) drawHeart(x - 2, top - 3 + Math.round(Math.sin(R.t * 4)));
+  else if (!a.tame && a.fed > 0) for (let k = 0; k < d.feeds; k++) drawHeart(x - d.feeds * 3 + k * 6, top - 3, k < a.fed ? '#e0604f' : 'rgba(255,255,255,.35)');
 }
 
 function render(dt) {
@@ -137,6 +214,7 @@ function render(dt) {
   for (const z of Z) tall.push({ y: z.y, z });
   for (const s of S.surv) tall.push({ y: s.y, s });
   for (const n of S.npcs) if (Math.abs(n.x - p.x) < R.w && Math.abs(n.y - p.y) < R.h) tall.push({ y: n.y, n });
+  for (const a of S.animals) if (Math.abs(a.x - p.x) < R.w && Math.abs(a.y - p.y) < R.h) tall.push({ y: a.y, a });
   if (p.hp > 0) tall.push({ y: p.y, p: true });
   tall.sort((a, b) => a.y - b.y);
   for (const d of tall) {
@@ -144,15 +222,21 @@ function render(dt) {
     else if (d.z) {
       const z = d.z, zt = ZT[z.t];
       if (z.x < R.camX - 30 || z.x > R.camX + R.w + 30 || z.y < R.camY - 30 || z.y > R.camY + R.h + 40) continue;
-      const pos = drawChar(z, zt.pal, zt.boss ? 1.9 : zt.big ? 1.4 : 1);
+      if (z.fuse > 0) z.flash = Math.sin(R.t * 30) > 0 ? 0.05 : 0;
+      const pos = drawChar(z, zt.pal, zt.boss ? 1.9 : zt.big ? 1.4 : 1, zt.crawl ? 0.6 : 1);
       if (z.hp < z.max) {
-        const w = zt.boss ? 24 : 12, f = clamp(z.hp / z.max, 0, 1);
-        ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(pos.x - w / 2, pos.y - (zt.boss ? 38 : zt.big ? 28 : 21), w, 2);
-        ctx.fillStyle = zt.boss ? '#f0aa3c' : '#d8503f'; ctx.fillRect(pos.x - w / 2, pos.y - (zt.boss ? 38 : zt.big ? 28 : 21), w * f, 2);
+        const w = zt.boss ? 24 : 12, f = clamp(z.hp / z.max, 0, 1), hy = pos.y - (zt.boss ? 38 : zt.big ? 28 : zt.crawl ? 14 : 21);
+        ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(pos.x - w / 2, hy, w, 2);
+        ctx.fillStyle = zt.boss ? '#f0aa3c' : zt.armor ? '#9ab0c8' : '#d8503f'; ctx.fillRect(pos.x - w / 2, hy, w * f, 2);
       }
-    } else if (d.s) {
+    } else if (d.a) drawAnimal(d.a);
+    else if (d.s) {
       const s = d.s;
+      const it = s.item && itemById(s.item);
+      const sx = Math.round(s.x - R.camX), sy = Math.round(s.y - R.camY);
+      if (it && heldBehind(s, null)) drawHeldItem(s, it.base, sx, sy, -1, null, 0);
       const pos = drawChar(s, s.pal);
+      if (it && !heldBehind(s, null)) drawHeldItem(s, it.base, sx, sy, -1, null, 0);
       if (s.sleep) { ctx.fillStyle = '#c8d4e8'; ctx.font = '6px monospace'; ctx.fillText('z', pos.x + 4, pos.y - 18 - (R.t * 4 % 4)); }
       if (s.hp < 100) { ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(pos.x - 6, pos.y - 21, 12, 2); ctx.fillStyle = '#7cc46a'; ctx.fillRect(pos.x - 6, pos.y - 21, 12 * s.hp / 100, 2); }
     } else if (d.n) {
@@ -161,10 +245,7 @@ function render(dt) {
       const bob = Math.round(Math.sin(R.t * 4) * 1.5);
       ctx.fillStyle = '#16140f'; ctx.fillRect(pos.x - 2, pos.y - 28 + bob, 4, 8);
       ctx.fillStyle = '#f0c24a'; ctx.fillRect(pos.x - 1, pos.y - 27 + bob, 2, 4); ctx.fillRect(pos.x - 1, pos.y - 22 + bob, 2, 1);
-    } else if (d.p) {
-      const pos = drawChar(p, 'player');
-      drawHeld(p, pos.x, pos.y);
-    }
+    } else if (d.p) drawPlayer(p);
   }
   // projectiles
   for (const b of BUL) {
@@ -253,6 +334,8 @@ function drawCursorTile() {
   const t = UIS.target;
   if (t && t.k === 'tile') corners(t.x * TS - R.camX, t.y * TS - R.camY, '#f6e7b0');
   const o = objAt(tx, ty);
+  const it = heldItem();
+  if (it && ITEMS[it.base].kind === 'hammer' && OBJ[o] && OBJ[o].build && W.hp[idx(tx, ty)] < OBJ[o].hp && dist(S.player.x, S.player.y - 4, tx * TS + 8, ty * TS + 8) <= REACH + 8) { corners(x, y, '#9ad06a'); return; }
   if (o && OBJ[o] && (OBJ[o].give || o === O.CRATE) && dist(S.player.x, S.player.y - 4, tx * TS + 8, ty * TS + 8) <= REACH) corners(x, y, 'rgba(255,255,255,.75)');
 }
 function corners(x, y, col) {

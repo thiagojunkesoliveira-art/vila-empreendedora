@@ -25,6 +25,14 @@ jobs:
         shell: bash
         run: echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
+      # Every version must come with update notes for the in-game "Patch de atualização".
+      - name: Conferir as notas da versão
+        shell: bash
+        run: |
+          v="${{ steps.version.outputs.value }}"
+          grep -q "const GAME_VERSION = '$v';" src/js/data.js || { echo "Atualize GAME_VERSION e PATCHES em src/js/data.js para $v."; exit 1; }
+          grep -q "v: '$v'" src/js/data.js || { echo "Falta a entrada $v em PATCHES (src/js/data.js)."; exit 1; }
+
       - name: Verificar se a release já existe
         id: check
         shell: bash

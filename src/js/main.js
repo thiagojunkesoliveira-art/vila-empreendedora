@@ -5,7 +5,13 @@ function init() {
   buildIcons();
   resize();
   addEventListener('resize', resize);
-  if (!load()) { newGame(); openPanel('welcome'); }
+  // A new world opens with the welcome; an update shows its notes once ("Patch de atualização").
+  const fresh = !load();
+  if (fresh) newGame();
+  const show = [];
+  if (fresh) show.push('welcome');
+  if (patchUnseen()) show.push('patch');
+  if (show.length) { UIS.queue = show.slice(1); openPanel(show[0]); }
   renderHUD();
   let last = performance.now(), hudT = 0, saveT = 0;
   function frame(now) {
