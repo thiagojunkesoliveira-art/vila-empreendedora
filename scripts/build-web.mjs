@@ -1,5 +1,5 @@
-// Builds the single-file web version (the claude.ai link) from src/:
-// inlines style.css and game.js and loads the fonts from Google Fonts instead of src/fonts.
+// Builds the single-file web version (web/ultimo-abrigo.html) from src/:
+// inlines style.css and every script listed in index.html, in order.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,13 +9,12 @@ const read = (f) => fs.readFileSync(path.join(root, 'src', f), 'utf8');
 const html = read('index.html');
 const body = html.slice(html.indexOf('<!-- GAME:BODY:START -->') + 24, html.indexOf('<!-- GAME:BODY:END -->')).trim();
 const css = read('style.css').trim();
-const js = read('game.js').trim();
-if (js.includes('</script>') || css.includes('</style>')) throw new Error('source contains a closing tag that would break inlining');
+const scripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
+const js = scripts.map((s) => `// ---- ${s} ----\n` + read(s).trim()).join('\n\n');
+if (js.includes('</script') || css.includes('</style')) throw new Error('source contains a closing tag that would break inlining');
 
-const page = `<meta charset="utf-8">
-<title>Vila Empreendedora</title>
-<meta name="claude:viewport-fit-sides" content="cover">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&family=Press+Start+2P&display=swap">
+// The claude.ai artifact wraps this in its own <html>/<head>/<body> skeleton.
+const page = `<title>Último Abrigo</title>
 <style>
 ${css}
 </style>
@@ -27,5 +26,5 @@ ${js}
 </script>
 `;
 fs.mkdirSync(path.join(root, 'web'), { recursive: true });
-fs.writeFileSync(path.join(root, 'web', 'vila-empreendedora.html'), page);
-console.log('web/vila-empreendedora.html', page.length, 'bytes');
+fs.writeFileSync(path.join(root, 'web', 'ultimo-abrigo.html'), page);
+console.log('web/ultimo-abrigo.html', page.length, 'bytes,', scripts.length, 'scripts');

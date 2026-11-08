@@ -1,8 +1,8 @@
 {
   "name": "vila-empreendedora",
   "productName": "Vila Empreendedora",
-  "version": "1.0.0",
-  "description": "RPG em pixel art: comece uma empresa numa garagem e cresça até a torre corporativa.",
+  "version": "2.0.0",
+  "description": "Último Abrigo: jogo incremental de sobrevivência zumbi. Colete, construa, explore e resista às hordas.",
   "main": "main.js",
   "author": "Vila Empreendedora",
   "license": "UNLICENSED",
